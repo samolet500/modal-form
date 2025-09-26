@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { ref, computed } from "vue";
+
 const props = defineProps<{
   modelValue: string;
   errorMessage?: string;
@@ -12,24 +14,41 @@ const dataList = ref<any[]>([]);
 const activeIndex = ref(0);
 const loading = ref(false);
 const isFocused = ref(false);
+const dadataError = ref(false);
+const manualInput = ref(false);
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 const fetchAddress = async (query: string) => {
+  if (manualInput.value) return;
+
   if (!query || query.length < 3) {
     dataList.value = [];
+    dadataError.value = false;
     return;
   }
+
   loading.value = true;
+  dadataError.value = false;
+
   try {
     const { suggestions: result } = await $fetch("/api/dadata/address", {
       method: "POST",
       body: { query },
     });
 
-    dataList.value = result;
+    dataList.value = Array.isArray(result) ? result : [];
+
+    // Если нет результатов — разрешаем ручной ввод
+    if (!result.length) {
+      dadataError.value = true;
+      manualInput.value = true; // переключаем на ручной ввод
+    }
   } catch (e) {
     console.error("Ошибка Dadata", e);
+    dataList.value = [];
+    dadataError.value = true; // ошибка запроса, разрешаем ручной ввод
+    manualInput.value = true;
   } finally {
     loading.value = false;
   }
@@ -38,6 +57,7 @@ const fetchAddress = async (query: string) => {
 const selectAddress = (value: string) => {
   emit("update:modelValue", value);
   dataList.value = [];
+  dadataError.value = false;
 };
 
 const onKeydown = (e: KeyboardEvent) => {
@@ -53,9 +73,7 @@ const onKeydown = (e: KeyboardEvent) => {
   } else if (e.key === "Enter") {
     e.preventDefault();
     const selected = dataList.value[activeIndex.value];
-    if (selected) {
-      selectAddress(selected.value);
-    }
+    if (selected) selectAddress(selected.value);
   }
 };
 
@@ -63,19 +81,17 @@ const onInput = (e: Event) => {
   const value = (e.target as HTMLInputElement).value;
   emit("update:modelValue", value);
 
-  // debounce: очищаем старый таймер
-  if (debounceTimer) clearTimeout(debounceTimer);
+  if (manualInput.value) return;
 
-  debounceTimer = setTimeout(() => {
-    fetchAddress(value);
-  }, 300);
+  if (debounceTimer) clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => fetchAddress(value), 300);
 };
 
 const hasValue = computed(
-  () => props.modelValue && props.modelValue.length > 0
+  () => !!props.modelValue && props.modelValue.length > 0
 );
 
-const isLoadingData = computed(() => loading.value && !dataList.value.length);
+const isLoadingData = computed(() => loading.value && !dadataError.value);
 </script>
 
 <template>
@@ -87,23 +103,30 @@ const isLoadingData = computed(() => loading.value && !dataList.value.length);
       class="base-address-input__label"
       :class="{ floated: isFocused || hasValue }"
       for="address"
-      >Адрес</label
     >
+      Адрес
+    </label>
+
     <input
       id="address"
       class="base-address-input__input"
       name="address"
       type="text"
       :value="modelValue"
+      :disabled="isLoadingData"
       @input="onInput"
       @keydown="onKeydown"
       @focus="isFocused = true"
       @blur="isFocused = false"
     />
 
-    <!-- Индикатор загрузки -->
     <BaseSpinner v-if="isLoadingData" class="base-address-input__spinner" />
 
+    <p v-if="dadataError" class="base-address-input__manual">
+      Нет данных в Dadata или ошибка загрузки данных? Введите адрес вручную.
+    </p>
+
+    <!-- Список подсказок -->
     <ul v-if="dataList.length" class="base-address-input__list">
       <li
         v-for="(s, idx) in dataList"
@@ -115,9 +138,11 @@ const isLoadingData = computed(() => loading.value && !dataList.value.length);
       </li>
     </ul>
 
-    <span v-if="errorMessage" class="base-address-input__error">{{
-      errorMessage
-    }}</span>
+    <!-- Ручной ввод, если DaData пусто или ошибка -->
+
+    <span v-if="errorMessage" class="base-address-input__error">
+      {{ errorMessage }}
+    </span>
   </div>
 </template>
 
@@ -183,7 +208,7 @@ const isLoadingData = computed(() => loading.value && !dataList.value.length);
 
   &.focused &__label,
   &__label.floated {
-    transform: translateY(calc(-50% - 15px));
+    transform: translateY(calc(-50% - 25px));
   }
 
   &__error {
@@ -220,6 +245,11 @@ const isLoadingData = computed(() => loading.value && !dataList.value.length);
   &__list li:hover,
   &__list li.active {
     background: $color-primary-light;
+  }
+
+  &__manual {
+    font-size: 12px;
+    margin-top: 4px;
   }
 }
 </style>
